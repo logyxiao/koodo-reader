@@ -1,3 +1,4 @@
+import ShelfUtil from "../../../utils/reader/shelfUtil";
 import React from "react";
 import "./deleteDialog.css";
 import { Trans } from "react-i18next";
@@ -52,11 +53,7 @@ class DeleteDialog extends React.Component<
   deleteBookFromShelf = () => {
     if (this.props.isSelectBook) {
       this.props.selectedBooks.forEach((item) => {
-        ConfigService.deleteFromMapConfig(
-          this.props.shelfTitle,
-          item,
-          "shelfList"
-        );
+        ShelfUtil.removeBooks(this.props.shelfTitle, [item]);
       });
       this.props.handleSelectedBooks([]);
       this.props.handleFetchBooks();
@@ -67,11 +64,7 @@ class DeleteDialog extends React.Component<
       });
       return;
     }
-    ConfigService.deleteFromMapConfig(
-      this.props.shelfTitle,
-      this.props.currentBook.key,
-      "shelfList"
-    );
+    ShelfUtil.removeBooks(this.props.shelfTitle, [this.props.currentBook.key]);
   };
   deleteAllBookInTrash = async () => {
     toast.loading(this.props.t("Deleting..."), {

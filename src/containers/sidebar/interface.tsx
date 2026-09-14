@@ -28,4 +28,6 @@ export interface SidebarState {
   isOpenDelete: boolean;
   isCreateShelf: boolean;
   dropTargetShelf: string;
+  newShelfParent: string;
+  collapsedShelves: string[];
 }

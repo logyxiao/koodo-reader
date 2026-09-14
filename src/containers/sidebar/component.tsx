@@ -7,6 +7,7 @@ import { ConfigService } from "../../assets/lib/kookit-extra-browser.min";
 import { getWebsiteUrl, openInBrowser } from "../../utils/common";
 import { Trans } from "react-i18next";
 import toast from "react-hot-toast";
+import ShelfUtil, { SHELVES_CHANGED } from "../../utils/reader/shelfUtil";
 import {
   addBooksToFavorite,
   addBooksToShelf,
@@ -30,6 +31,9 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
       isCreateShelf: false,
       newShelfName: "",
       dropTargetShelf: "",
+      newShelfParent: "",
+      collapsedShelves:
+        ConfigService.getAllListConfig("collapsedShelves") || [],
     };
   }
   componentDidMount() {
@@ -39,10 +43,18 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
         : document.URL.split("/").reverse()[0]
     );
     document.addEventListener("dragend", this.handleDocumentDragEnd);
+    window.addEventListener(SHELVES_CHANGED, this.handleShelvesChanged);
   }
   componentWillUnmount() {
     document.removeEventListener("dragend", this.handleDocumentDragEnd);
+    window.removeEventListener(SHELVES_CHANGED, this.handleShelvesChanged);
   }
+  handleShelvesChanged = () => {
+    this.setState({
+      collapsedShelves:
+        ConfigService.getAllListConfig("collapsedShelves") || [],
+    });
+  };
   handleDocumentDragEnd = () => {
     this.setState({ dropTargetShelf: "" });
   };
@@ -89,16 +101,21 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
       this.setState({ isCreateShelf: false, newShelfName: "" });
       return;
     }
-    let shelfList = ConfigService.getAllMapConfig("shelfList");
-    if (shelfList.hasOwnProperty(this.state.newShelfName)) {
-      toast(this.props.t("Duplicate shelf"));
-      return;
+    try {
+      ShelfUtil.create(this.state.newShelfName, this.state.newShelfParent);
+      const collapsedShelves = this.state.collapsedShelves.filter(
+        (key) => key !== this.state.newShelfParent
+      );
+      ConfigService.setAllListConfig(collapsedShelves, "collapsedShelves");
+      toast.success(this.props.t("Created successfully"));
+      this.setState({
+        isCreateShelf: false,
+        newShelfName: "",
+        collapsedShelves,
+      });
+    } catch (error) {
+      toast.error(this.props.t((error as Error).message));
     }
-    ConfigService.setListConfig(this.state.newShelfName, "sortedShelfList");
-
-    ConfigService.setOneMapConfig(this.state.newShelfName, [], "shelfList");
-    toast.success(this.props.t("Created successfully"));
-    this.setState({ isCreateShelf: false, newShelfName: "" });
   };
   handleBookDrop = (shelfTitle: string, event: React.DragEvent) => {
     event.preventDefault();
@@ -174,9 +191,7 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
       }
     },
     onDragLeave: (event: React.DragEvent) => {
-      if (
-        !event.currentTarget.contains(event.relatedTarget as Node | null)
-      ) {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
         this.setState({ dropTargetShelf: "" });
       }
     },
@@ -188,8 +203,7 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
     },
     onDrop,
   });
-  isBookDropTarget = (mode: string) =>
-    mode === "favorite" || mode === "trash";
+  isBookDropTarget = (mode: string) => mode === "favorite" || mode === "trash";
   render() {
     const renderSideMenu = () => {
       return sideMenu.map((item) => {
@@ -271,107 +285,113 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
       });
     };
     const renderSideShelf = () => {
-      let sortedShelfList =
-        ConfigService.getAllListConfig("sortedShelfList") || [];
-      let shelfList = ConfigService.getAllMapConfig("shelfList");
-      let shelfTitleList = Object.keys(shelfList);
-      let isShowShelfBookCount =
+      const tree = ShelfUtil.getTree();
+      const shelves = ShelfUtil.getAll();
+      const collapsed = new Set(this.state.collapsedShelves);
+      const showCount =
         ConfigService.getReaderConfig("isShowShelfBookCount") === "yes";
-
-      return Array.from(new Set([...sortedShelfList, ...shelfTitleList])).map(
-        (item, index) => {
-          const shelfBookCount = Array.isArray(shelfList[item])
-            ? shelfList[item].length
-            : 0;
-          return (
-            <li
-              key={item}
+      return tree
+        .filter(
+          (node) =>
+            !tree.some(
+              (parent) =>
+                collapsed.has(parent.key) &&
+                node.key.startsWith(parent.key + "/")
+            )
+        )
+        .map((node) => (
+          <li
+            key={node.key}
+            title={node.key}
+            className={
+              "side-menu-item shelf-tree-item" +
+              (this.props.shelfTitle === node.key ? " active" : "") +
+              (this.state.dropTargetShelf === node.key
+                ? " shelf-drop-target"
+                : "")
+            }
+            {...this.getBookDragHandlers(node.key, (event) =>
+              this.handleBookDrop(node.key, event)
+            )}
+          >
+            <div
               className={
-                (this.props.shelfTitle === item
-                  ? "active side-menu-item"
-                  : "side-menu-item") +
-                (this.state.dropTargetShelf === item
-                  ? " shelf-drop-target"
-                  : "")
+                "side-menu-selector" +
+                (this.props.shelfTitle === node.key ? " active-selector" : "")
               }
-              id={`sidebar-${index}`}
-              onClick={() => {
-                this.props.handleShelf(item);
-                this.props.handleMode("shelf");
-                this.setState({ mode: "" });
-                this.props.history.push("/manager/shelf");
+              style={{
+                paddingLeft: this.props.isCollapsed ? 20 : 22 + node.depth * 14,
+                boxSizing: "border-box",
               }}
-              {...this.getBookDragHandlers(item, (event) => {
-                this.handleBookDrop(item, event);
-              })}
-              onMouseEnter={() => {
-                this.handleShelfHover(item);
-              }}
-              onMouseLeave={() => {
-                this.handleShelfHover("");
-              }}
-              style={
-                this.props.isCollapsed ? { width: 40, marginLeft: 15 } : {}
-              }
             >
-              {this.props.shelfTitle === item ? (
-                <div className="side-menu-selector-container"></div>
-              ) : null}
-              {this.state.hoverShelfTitle === item ? (
-                <div className="side-menu-hover-container"></div>
-              ) : null}
-              <div
-                className={
-                  this.props.shelfTitle === item
-                    ? "side-menu-selector active-selector"
-                    : "side-menu-selector "
+              <button
+                type="button"
+                className="shelf-tree-toggle"
+                disabled={!node.hasChildren}
+                aria-label={
+                  this.props.t(
+                    collapsed.has(node.key) ? "Expand shelf" : "Collapse shelf"
+                  ) +
+                  ": " +
+                  node.name
                 }
+                aria-expanded={
+                  node.hasChildren ? !collapsed.has(node.key) : undefined
+                }
+                onClick={() => {
+                  const next = collapsed.has(node.key)
+                    ? this.state.collapsedShelves.filter(
+                        (key) => key !== node.key
+                      )
+                    : [...this.state.collapsedShelves, node.key];
+                  ConfigService.setAllListConfig(next, "collapsedShelves");
+                  this.setState({ collapsedShelves: next });
+                }}
               >
-                <div
-                  className="side-menu-icon"
-                  style={this.props.isCollapsed ? {} : { marginLeft: "38px" }}
-                >
-                  <span
-                    data-tooltip-id="my-tooltip"
-                    data-tooltip-content={item}
-                  >
-                    <span
-                      className={
-                        this.props.shelfTitle === item
-                          ? `icon-bookshelf-line  active-icon sidebar-shelf-icon`
-                          : `icon-bookshelf-line sidebar-shelf-icon`
-                      }
-                      style={
-                        this.props.isCollapsed
-                          ? { position: "relative", marginLeft: "-8px" }
-                          : {}
-                      }
-                    ></span>
+                {node.hasChildren ? (collapsed.has(node.key) ? "▸" : "▾") : "·"}
+              </button>
+              <button
+                type="button"
+                className="shelf-tree-link"
+                onClick={() => {
+                  this.props.handleShelf(node.key);
+                  this.props.handleMode("shelf");
+                  this.props.handleSearch(false);
+                  this.props.handleSelectBook(false);
+                  this.setState({ mode: "" });
+                  this.props.history.push("/manager/shelf");
+                }}
+              >
+                <span className="icon-bookshelf-line" />
+                {!this.props.isCollapsed && (
+                  <span className="sidebar-shelf-name">{node.name}</span>
+                )}
+                {!this.props.isCollapsed && showCount && (
+                  <span className="shelf-tree-count">
+                    {ShelfUtil.bookKeys(node.key, shelves).length}
                   </span>
-                </div>
-
-                <span
-                  className="sidebar-shelf-content"
-                  style={
-                    this.props.isCollapsed
-                      ? { display: "none", width: "70%" }
-                      : {}
+                )}
+              </button>
+              {!this.props.isCollapsed && (
+                <button
+                  type="button"
+                  className="shelf-tree-add"
+                  aria-label={this.props.t("New child shelf") + ": " + node.key}
+                  title={this.props.t("New child shelf")}
+                  onClick={() =>
+                    this.setState({
+                      isCreateShelf: true,
+                      newShelfParent: node.key,
+                      newShelfName: "",
+                    })
                   }
                 >
-                  <span className="sidebar-shelf-name">
-                    {this.props.t(item)}
-                  </span>
-                  {isShowShelfBookCount && (
-                    <span className="sidebar-shelf-count">
-                      {shelfBookCount}
-                    </span>
-                  )}
-                </span>
-              </div>
-            </li>
-          );
-        }
-      );
+                  +
+                </button>
+              )}
+            </div>
+          </li>
+        ));
     };
     return (
       <>
@@ -470,52 +490,68 @@ class Sidebar extends React.Component<SidebarProps, SidebarState> {
                       : { width: "60%" }
                   }
                   onClick={() => {
-                    this.setState({ isCreateShelf: true });
+                    this.setState({
+                      isCreateShelf: true,
+                      newShelfParent: "",
+                      newShelfName: "",
+                    });
                   }}
                 >
                   {this.props.t("New shelf")}
                 </span>
               </div>
             ) : (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                }}
-              >
-                <input
-                  ref={this.newShelfInput}
-                  type="text"
-                  name="newShelf"
-                  id="sidebar-new-shelf"
-                  className="tag-list-item-new"
-                  onChange={(event) => {
-                    // Remove special characters from the shelf name
-                    const sanitizedValue = event.target.value.replace(
-                      /[\[\]{}",:\/\\|<>*?]/g,
-                      ""
-                    );
-                    this.setState({ newShelfName: sanitizedValue });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
+              <div className="shelf-create-form">
+                <select
+                  aria-label={this.props.t("Parent shelf")}
+                  value={this.state.newShelfParent}
+                  onChange={(event) =>
+                    this.setState({ newShelfParent: event.target.value })
+                  }
+                >
+                  <option value="">{this.props.t("Top level")}</option>
+                  {ShelfUtil.getTree().map((node) => (
+                    <option key={node.key} value={node.key}>
+                      {node.key}
+                    </option>
+                  ))}
+                </select>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <input
+                    ref={this.newShelfInput}
+                    type="text"
+                    name="newShelf"
+                    id="sidebar-new-shelf"
+                    className="tag-list-item-new"
+                    value={this.state.newShelfName}
+                    placeholder={this.props.t("Shelf name")}
+                    onChange={(event) => {
+                      // Remove special characters from the shelf name
+                      const sanitizedValue = event.target.value.replace(
+                        /[\[\]{}",:\/\\|<>*?]/g,
+                        ""
+                      );
+                      this.setState({ newShelfName: sanitizedValue });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        this.handleCreateShelf();
+                      }
+                    }}
+                  />
+                  <span
+                    className={`icon-check sidebar-shelf-icon`}
+                    onClick={(event) => {
+                      event.stopPropagation();
                       this.handleCreateShelf();
-                    }
-                  }}
-                />
-                <span
-                  className={`icon-check sidebar-shelf-icon`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    this.handleCreateShelf();
-                  }}
-                  style={{
-                    cursor: "pointer",
-                    marginRight: "30px",
-                    marginTop: "5px",
-                  }}
-                ></span>
+                    }}
+                    style={{
+                      cursor: "pointer",
+                      marginRight: "30px",
+                      marginTop: "5px",
+                    }}
+                  ></span>
+                </div>
               </div>
             )}
             {!this.props.isCollapsed && (

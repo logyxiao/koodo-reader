@@ -86,7 +86,7 @@ class PopupOptionDialog extends React.Component<
               this.props.handlePopupOptionUpdate(Date.now());
             }}
             animation={200}
-            delayOnTouchStart={true}
+            delayOnTouchOnly={true}
             delay={2}
             scroll={true}
             scrollSensitivity={140}

@@ -10,6 +10,7 @@ import SortShelfDialog from "./component";
 import { withRouter } from "react-router-dom";
 const mapStateToProps = (state: stateType) => {
   return {
+    shelfTitle: state.sidebar.shelfTitle,
     isOpenSortShelfDialog: state.backupPage.isOpenSortShelfDialog,
   };
 };

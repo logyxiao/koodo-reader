@@ -63,7 +63,11 @@ class Manager extends React.Component<ManagerProps, ManagerState> {
         }
       );
     }
-    if (nextProps.books && nextProps.books.length === 1 && !this.props.books) {
+    if (
+      nextProps.books &&
+      nextProps.books.length > 0 &&
+      this.props.location.pathname === "/manager/empty"
+    ) {
       this.props.history.push("/manager/home");
     }
     if (this.props.mode !== nextProps.mode) {
@@ -176,7 +180,13 @@ class Manager extends React.Component<ManagerProps, ManagerState> {
               return new Promise((resolve) => {
                 if (entry.isFile) {
                   (entry as FileSystemFileEntry).file(
-                    (file) => resolve([file]),
+                    (file) => {
+                      (file as any).shelfSegments = entry.fullPath
+                        .split("/")
+                        .filter(Boolean)
+                        .slice(0, -1);
+                      resolve([file]);
+                    },
                     () => resolve([])
                   );
                 } else if (entry.isDirectory) {

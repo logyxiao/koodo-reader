@@ -545,6 +545,8 @@ const createMainWin = () => {
     switch (operation) {
       case "exists":
         return fs.existsSync(filePath);
+      case "realpath":
+        return fs.realpathSync(filePath);
       case "mkdir":
         return fs.mkdirSync(filePath, args.options || {});
       case "read":

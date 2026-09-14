@@ -6,3 +6,32 @@
   text-overflow: ellipsis;
   overflow: hidden;
 }
+
+.shelf-edit-row {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 70px;
+  gap: 6px;
+  padding: 6px 0;
+}
+.shelf-edit-row input {
+  width: 45%;
+  flex: 1;
+  min-width: 80px;
+}
+.shelf-edit-row select {
+  max-width: 43%;
+  padding: 5px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid #8886;
+  border-radius: 4px;
+}
+
+.shelf-action {
+  color: inherit;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}

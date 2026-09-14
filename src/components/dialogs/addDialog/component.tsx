@@ -1,3 +1,4 @@
+import ShelfUtil from "../../../utils/reader/shelfUtil";
 import React, { Component } from "react";
 import { Trans } from "react-i18next";
 import { AddDialogProps, AddDialogState } from "./interface";
@@ -27,7 +28,12 @@ class AddDialog extends Component<AddDialogProps, AddDialogState> {
         toast(this.props.t("Duplicate shelf"));
         return;
       }
-      ConfigService.setListConfig(shelfTitle, "sortedShelfList");
+      try {
+        shelfTitle = ShelfUtil.create(shelfTitle);
+      } catch (error) {
+        toast.error(this.props.t((error as Error).message));
+        return;
+      }
     }
     if (!shelfTitle) {
       toast(this.props.t("Shelf Title is Empty"));
@@ -44,11 +50,7 @@ class AddDialog extends Component<AddDialogProps, AddDialogState> {
     if (this.props.isSelectBook) {
       this.props.selectedBooks.forEach((item) => {
         if (this.state.actionType === "move") {
-          ConfigService.deleteFromMapConfig(
-            this.props.shelfTitle,
-            item,
-            "shelfList"
-          );
+          ShelfUtil.removeBooks(this.props.shelfTitle, [item]);
         }
         ConfigService.setMapConfig(shelfTitle, item, "shelfList");
       });
@@ -58,11 +60,9 @@ class AddDialog extends Component<AddDialogProps, AddDialogState> {
       }
     } else {
       if (this.state.actionType === "move") {
-        ConfigService.deleteFromMapConfig(
-          this.props.shelfTitle,
+        ShelfUtil.removeBooks(this.props.shelfTitle, [
           this.props.currentBook.key,
-          "shelfList"
-        );
+        ]);
       }
 
       ConfigService.setMapConfig(
@@ -72,6 +72,7 @@ class AddDialog extends Component<AddDialogProps, AddDialogState> {
       );
     }
 
+    ShelfUtil.notify();
     this.props.handleAddDialog(false);
     toast.success(this.props.t("Addition successful"));
     this.props.handleActionDialog(false);
@@ -88,14 +89,9 @@ class AddDialog extends Component<AddDialogProps, AddDialogState> {
   };
   render() {
     const renderShelfList = () => {
-      let sortedShelfList =
-        ConfigService.getAllListConfig("sortedShelfList") || [];
-      let shelfTitleList = Object.keys(
-        ConfigService.getAllMapConfig("shelfList")
-      );
-      let shelfTitle = [
+      const shelfTitle = [
         "New shelf",
-        ...Array.from(new Set([...sortedShelfList, ...shelfTitleList])),
+        ...ShelfUtil.getTree().map((node) => node.key),
       ];
       return shelfTitle.map((item) => {
         return (

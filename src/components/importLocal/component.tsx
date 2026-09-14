@@ -27,6 +27,12 @@ import {
 import DatabaseService from "../../utils/storage/databaseService";
 import { BookHelper } from "../../assets/lib/kookit.min";
 import { analyzeBookTitle } from "../../utils/request/reader";
+import ShelfUtil from "../../utils/reader/shelfUtil";
+import {
+  collectFolderImportFiles,
+  FolderImportFile,
+  relativeShelfSegments,
+} from "../../utils/file/folderImport";
 
 // Convert supportedFormats to react-dropzone v14+ accept format
 // Key is MIME type, value is array of file extensions
@@ -41,7 +47,7 @@ const supportedFormatsAccept = supportedFormats.reduce<
   return obj;
 }, {});
 declare var window: any;
-let clickFilePath = "";
+
 // Comic 封面规则与 kookit comic-book.js 保持一致：取自然排序后的第一张图片
 const COMIC_IMAGE_EXTS = [
   ".jpg",
@@ -64,8 +70,15 @@ const getComicImageExt = (name: string) => {
   return ext === "jpg" ? "jpeg" : ext;
 };
 
-class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
+export class ImportLocal extends React.Component<
+  ImportLocalProps,
+  ImportLocalState
+> {
   resizeHandler: (() => void) | null = null;
+  private importQueue: Promise<void> = Promise.resolve();
+  private importTargetShelf = "";
+  private importingFile: FolderImportFile | null = null;
+  private folderImportRunning = false;
 
   constructor(props: ImportLocalProps) {
     super(props);
@@ -119,7 +132,6 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     }
   }
   handleFilePath = async (filePath: string) => {
-    clickFilePath = filePath;
     const fileName = window.electronAPI.path.basename(filePath);
     const stat = window.electronAPI.fs.statSync(filePath);
     const tempFile = new File([], fileName);
@@ -139,6 +151,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
 
     const fileTemp = new File([], fileName);
     fileTemp.path = filePath;
+    (fileTemp as FolderImportFile).openImmediately = true;
     Object.defineProperty(fileTemp, "size", {
       value: stat.size,
       writable: true,
@@ -154,120 +167,61 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     BookUtil.redirectBook(book);
     this.props.history.push("/manager/home");
   };
-  handleAddBook = (
+  handleAddBook = async (
     book: BookModel,
     buffer: ArrayBuffer,
     sourcePath?: string
   ) => {
-    return new Promise<void>(async (resolve) => {
+    const quiet = this.importingFile?.importQuiet;
+    if (!quiet)
       toast.loading(
         this.props.t("Importing") + ": " + book.name.substring(0, 50),
-        {
-          id: "add-book",
-        }
+        { id: "add-book" }
       );
-      let isImportPath =
-        ConfigService.getReaderConfig("isImportPath") === "yes";
-      if (isElectron && isImportPath) {
-        const fs = window.electronAPI.fs;
-        if (!book.path || !fs.existsSync(book.path)) {
-          isImportPath = false;
-        }
-      }
-      if (this.state.isOpenFile) {
-        if (ConfigService.getReaderConfig("isPreventAdd") === "yes") {
-          //ignore
-        } else if (
-          this.props.isAuthed &&
-          ConfigService.getItem("defaultSyncOption")
-        ) {
-          await BookUtil.addBook(
-            book.key,
-            book.format.toLowerCase(),
-            buffer,
-            sourcePath
-          );
-          await CoverUtil.addCover(book);
-        } else if (isImportPath) {
-          await CoverUtil.addCover(book);
-          //ignore
-        } else {
-          await BookUtil.addBook(
-            book.key,
-            book.format.toLowerCase(),
-            buffer,
-            sourcePath
-          );
-          await CoverUtil.addCover(book);
-        }
-        if (ConfigService.getReaderConfig("isPreventAdd") === "yes") {
-          this.handleJump(book);
-          this.setState({ isOpenFile: false });
-          toast.dismiss("add-book");
-          return resolve();
-        }
-      } else {
-        if (
-          !isImportPath ||
-          (this.props.isAuthed && ConfigService.getItem("defaultSyncOption"))
-        ) {
-          await BookUtil.addBook(
-            book.key,
-            book.format.toLowerCase(),
-            buffer,
-            sourcePath
-          );
-        }
-
-        await CoverUtil.addCover(book);
-      }
-
+    const openOnly =
+      this.importingFile?.openImmediately &&
+      ConfigService.getReaderConfig("isPreventAdd") === "yes";
+    let isImportPath = ConfigService.getReaderConfig("isImportPath") === "yes";
+    if (
+      isElectron &&
+      (!book.path || !window.electronAPI.fs.existsSync(book.path))
+    )
+      isImportPath = false;
+    if (openOnly) {
+      this.handleJump(book);
+      this.setState({ isOpenFile: false });
+      toast.dismiss("add-book");
+      return;
+    }
+    if (
+      !isImportPath ||
+      (this.props.isAuthed && ConfigService.getItem("defaultSyncOption"))
+    ) {
+      await BookUtil.addBook(
+        book.key,
+        book.format.toLowerCase(),
+        buffer,
+        sourcePath
+      );
+    }
+    await CoverUtil.addCover(book);
+    await DatabaseService.saveRecord(book, "books");
+    if (this.importTargetShelf)
+      ShelfUtil.addBooks(this.importTargetShelf, [book.key]);
+    if (this.importingFile) this.importingFile.importStatus = "imported";
+    if (!quiet) {
       this.props.handleReadingBook(book);
       ConfigService.setListConfig(book.key, "recentBooks");
-      DatabaseService.saveRecord(book, "books")
-        .then(() => {
-          this.props.handleFetchBooks();
-          if (this.props.mode === "shelf") {
-            ConfigService.setMapConfig(
-              this.props.shelfTitle,
-              book.key,
-              "shelfList"
-            );
-          }
-          toast.success(
-            this.props.t("Addition successful") +
-              ": " +
-              book.name.substring(0, 50),
-            {
-              id: "add-book",
-            }
-          );
-          setTimeout(() => {
-            this.state.isOpenFile && this.handleJump(book);
-            if (
-              ConfigService.getReaderConfig("isOpenInMain") === "yes" &&
-              this.state.isOpenFile
-            ) {
-              this.setState({ isOpenFile: false });
-              return;
-            }
-            this.setState({ isOpenFile: false });
-            this.props.history.push("/manager/home");
-          }, 100);
-          return resolve();
-        })
-        .catch((error) => {
-          console.error(error, book.name);
-          toast.error(
-            this.props.t("Import failed") + ": " + book.name.substring(0, 50),
-            {
-              duration: 4000,
-              id: "add-book",
-            }
-          );
-          return resolve();
-        });
-    });
+      this.props.handleFetchBooks();
+      ShelfUtil.notify();
+      toast.success(
+        this.props.t("Addition successful") + ": " + book.name.substring(0, 50),
+        { id: "add-book" }
+      );
+      if (this.importingFile?.openImmediately) this.handleJump(book);
+      else this.props.history.push("/manager/home");
+    }
+    this.setState({ isOpenFile: false });
   };
 
   analyzeBookMetadata = async (book: BookModel, bookName: string) => {
@@ -289,146 +243,138 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     }
   };
 
-  getMd5WithBrowser = async (file: File) => {
-    return new Promise<void>(async (resolve) => {
-      const md5 = await calculateFileMD5(file);
-      if (!md5) {
-        console.error("md5 error", file.name);
+  getMd5WithBrowser = (file: FolderImportFile): Promise<void> => {
+    // All sources share one queue, so a folder target cannot leak into another import.
+    const selectedShelf =
+      this.props.mode === "shelf" ? this.props.shelfTitle : "";
+    const task = this.importQueue.then(async () => {
+      this.importingFile = file;
+      file.importStatus = "failed";
+      try {
+        const segments = relativeShelfSegments(file);
+        this.importTargetShelf = segments.length
+          ? ShelfUtil.ensurePath(segments)
+          : selectedShelf;
+        const md5 = await calculateFileMD5(file);
+        if (!md5) throw new Error(this.props.t("Import failed"));
+        await this.handleBook(file, md5);
+      } catch (error) {
+        console.error(error, file.name);
         toast.error(this.props.t("Import failed") + ": " + file.name, {
-          duration: 4000,
+          id: "add-book",
         });
-        return resolve();
-      } else {
-        try {
-          await this.handleBook(file, md5);
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          toast.error(errorMessage);
-          console.error(error);
-        }
-
-        return resolve();
+      } finally {
+        this.importingFile = null;
+        this.importTargetShelf = "";
       }
     });
+    this.importQueue = task.catch(() => {});
+    return task;
   };
 
-  handleBook = (file: File, md5: string) => {
-    let extension = (file.name as string)
-      .split(".")
-      .reverse()[0]
-      .toLocaleLowerCase();
-    let bookName = file.name.substr(0, file.name.length - extension.length - 1);
-    return new Promise<void>(async (resolve) => {
-      let isRepeat = false;
-      let repeatBook: BookModel | null = await BookUtil.getBookByMd5(md5);
-      if (repeatBook) {
-        isRepeat = true;
-        if (this.props.books && this.props.books.length > 0) {
-          this.props.books.forEach((item) => {
-            if (item.key === repeatBook!.key) {
-              toast.error(this.props.t("Duplicate book"));
-              return resolve();
-            }
-          });
+  importFolderFiles = async (files: FolderImportFile[]) => {
+    if (this.folderImportRunning) return;
+    this.folderImportRunning = true;
+    const counts = {
+      imported: 0,
+      linked: 0,
+      duplicate: 0,
+      trash: 0,
+      failed: 0,
+    };
+    try {
+      for (let index = 0; index < files.length; index++) {
+        const file = files[index];
+        file.importQuiet = true;
+        toast.loading(
+          `${this.props.t("Importing")}: ${index + 1}/${files.length} · ${file.name}`,
+          { id: "folder-import" }
+        );
+        await this.getMd5WithBrowser(file);
+        counts[file.importStatus || "failed"]++;
+        if ((index + 1) % 50 === 0) {
+          this.props.handleFetchBooks();
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        if (this.props.deletedBooks && this.props.deletedBooks.length > 0) {
-          this.props.deletedBooks.forEach((item) => {
-            if (item.key === repeatBook!.key) {
-              toast.error(this.props.t("Duplicate book in trash bin"));
-              return resolve();
-            }
-          });
-        }
-        return resolve();
       }
-      if (!isRepeat) {
-        // Pick the first candidate path that actually exists on disk.
-        // There are two candidates:
-        // 1. file.path - real disk path for drag & drop / dialog import,
-        //    but a virtual cloud path for cloud import;
-        // 2. clickFilePath - path captured when opening a book by click.
-        const fs = isElectron ? window.electronAPI.fs : null;
-        const candidates = [file.path, clickFilePath];
-        let sourcePath = "";
-        for (const candidate of candidates) {
-          if (isElectron && candidate && fs.existsSync(candidate)) {
-            sourcePath = candidate;
-            break;
-          }
+      toast.success(
+        `${this.props.t("Folder import complete")}: ${this.props.t("Imported")} ${counts.imported}, ${this.props.t("Linked to shelves")} ${counts.linked}, ${this.props.t("Skipped")} ${counts.duplicate + counts.trash}, ${this.props.t("Failed")} ${counts.failed}`,
+        { id: "folder-import", duration: 8000 }
+      );
+    } finally {
+      this.folderImportRunning = false;
+      this.props.handleFetchBooks();
+      ShelfUtil.notify();
+      this.setState({ isMoreOptionsVisible: false });
+    }
+    if (
+      ConfigService.getReaderConfig("isDisableAutoSync") !== "yes" &&
+      ConfigService.getItem("defaultSyncOption")
+    )
+      await this.props.cloudSyncFunc();
+  };
+
+  handleBook = async (file: FolderImportFile, md5: string) => {
+    const extension = file.name.split(".").pop()!.toLowerCase();
+    const bookName = file.name.slice(0, -(extension.length + 1));
+    const repeatBook = await BookUtil.getBookByMd5(md5);
+    if (repeatBook) {
+      const deleted = ConfigService.getAllListConfig("deletedBooks") || [];
+      if (deleted.includes(repeatBook.key)) {
+        file.importStatus = "trash";
+        if (!file.importQuiet)
+          toast.error(this.props.t("Duplicate book in trash bin"));
+      } else if (relativeShelfSegments(file).length && this.importTargetShelf) {
+        file.importStatus = ShelfUtil.addBooks(this.importTargetShelf, [
+          repeatBook.key,
+        ])
+          ? "linked"
+          : "duplicate";
+        if (!file.importQuiet) {
+          this.props.handleFetchBooks();
+          ShelfUtil.notify();
         }
-        // Path only used for the database record, never for file IO.
-        // Keeps the original path (or URL) when it can't be verified on disk,
-        // falling back to the original file name, so book.path is never empty.
-        const recordPath = sourcePath || file.path || file.name;
-        if (sourcePath) {
-          try {
-            if (
-              extension.toUpperCase() === "CBZ" ||
-              extension.toUpperCase() === "CBT"
-            ) {
-              await this.handleComicImport(
-                file,
-                bookName,
-                extension,
-                md5,
-                sourcePath,
-                resolve
-              );
-              return;
-            }
-            const content = window.electronAPI.fs.readFileSync(sourcePath);
-            const file_content = content.buffer as ArrayBuffer;
-            const realSize = content.byteLength;
-            await this.processBookContent(
-              bookName,
-              extension,
-              md5,
-              file_content,
-              file.size || realSize,
-              sourcePath,
-              recordPath,
-              resolve
-            );
-          } catch (error) {
-            console.error(error, bookName);
-            toast.error(this.props.t("Import failed") + ": " + bookName, {
-              duration: 4000,
-            });
-            return resolve();
-          }
-          return;
-        }
-        let reader = new FileReader();
-        reader.onload = async (event) => {
-          if (!event.target) {
-            console.error("e.target error", bookName);
-            toast.error(this.props.t("Import failed") + ": " + bookName, {
-              duration: 4000,
-            });
-            return resolve();
-          }
-          const file_content = event.target.result as ArrayBuffer;
-          await this.processBookContent(
-            bookName,
-            extension,
-            md5,
-            file_content,
-            file.size,
-            sourcePath,
-            recordPath,
-            resolve
-          );
-        };
-        reader.onerror = () => {
-          console.error("reader error", bookName);
-          toast.error(this.props.t("Import failed") + ": " + bookName, {
-            duration: 4000,
-          });
-          return resolve();
-        };
-        reader.readAsArrayBuffer(file);
+      } else {
+        file.importStatus = "duplicate";
+        toast.error(this.props.t("Duplicate book"));
       }
+      return;
+    }
+    const sourcePath =
+      isElectron && file.path && window.electronAPI.fs.existsSync(file.path)
+        ? file.path
+        : "";
+    const recordPath = sourcePath || file.path || file.name;
+    if (sourcePath && ["cbz", "cbt"].includes(extension)) {
+      await new Promise<void>((resolve, reject) => {
+        this.handleComicImport(
+          file,
+          bookName,
+          extension,
+          md5,
+          sourcePath,
+          resolve
+        ).catch(reject);
+      });
+      return;
+    }
+    const content = sourcePath
+      ? window.electronAPI.fs.readFileSync(sourcePath)
+      : null;
+    const buffer = content
+      ? new Uint8Array(content).buffer
+      : await file.arrayBuffer();
+    await new Promise<void>((resolve, reject) => {
+      this.processBookContent(
+        bookName,
+        extension,
+        md5,
+        buffer,
+        file.size || buffer.byteLength,
+        sourcePath,
+        recordPath,
+        resolve
+      ).catch(reject);
     });
   };
 
@@ -577,8 +523,6 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       });
       return resolve();
     }
-
-    clickFilePath = "";
 
     // get metadata failed
     if (!result || !result.key) {
@@ -937,6 +881,12 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       <Dropzone
         onDrop={async (acceptedFiles) => {
           this.props.handleDrag(false);
+          if (
+            acceptedFiles.some((file) => relativeShelfSegments(file).length > 0)
+          ) {
+            await this.importFolderFiles(acceptedFiles);
+            return;
+          }
           for (let item of acceptedFiles) {
             await this.getMd5WithBrowser(item);
           }
@@ -996,82 +946,26 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                           if (!newPath) {
                             return;
                           }
-                          //get all files in the folder
-                          const fs = window.electronAPI.fs;
-                          const path = window.electronAPI.path;
-                          const getAllFiles = (dirPath: string): string[] => {
-                            let files: string[] = [];
-
-                            try {
-                              const items = fs.readdirSync(dirPath);
-
-                              for (const item of items) {
-                                const fullPath = path.join(dirPath, item);
-                                const stat = fs.statSync(fullPath);
-
-                                if (stat.isDirectory) {
-                                  // Recursively get files from subdirectories
-                                  files = files.concat(getAllFiles(fullPath));
-                                } else if (stat.isFile) {
-                                  // Check if file has supported format
-                                  const ext = path
-                                    .extname(item)
-                                    .toLowerCase()
-                                    .substring(1);
-                                  if (supportedFormats.includes(`.${ext}`)) {
-                                    files.push(fullPath);
-                                  }
-                                }
-                              }
-                            } catch (error) {
-                              const errorMessage =
-                                error instanceof Error
-                                  ? error.message
-                                  : String(error);
-                              toast.error(errorMessage);
-                              console.error(
-                                `Error reading directory ${dirPath}:`,
-                                error
-                              );
-                            }
-
-                            return files;
-                          };
-
-                          // Get all supported book files
-                          const allFiles = getAllFiles(newPath);
-                          // Process each file
-                          for (const filePath of allFiles) {
-                            try {
-                              const path = window.electronAPI.path;
-                              const fileName = path.basename(filePath);
-
-                              let file = new File([], fileName);
-                              file.path = filePath;
-
-                              await this.getMd5WithBrowser(file);
-                            } catch (error) {
-                              const errorMessage =
-                                error instanceof Error
-                                  ? error.message
-                                  : String(error);
-                              toast.error(errorMessage);
-                              console.error(
-                                `Error processing file ${filePath}:`,
-                                error
-                              );
-                            }
-                          }
-                          this.setState({
-                            isMoreOptionsVisible: false,
-                          });
-                          if (
-                            ConfigService.getReaderConfig(
-                              "isDisableAutoSync"
-                            ) !== "yes" &&
-                            ConfigService.getItem("defaultSyncOption")
-                          ) {
-                            await this.props.cloudSyncFunc();
+                          try {
+                            const files = collectFolderImportFiles(
+                              window.electronAPI.fs,
+                              window.electronAPI.path,
+                              newPath,
+                              supportedFormats,
+                              (filePath) =>
+                                toast.error(
+                                  this.props.t("Unable to read folder entry") +
+                                    ": " +
+                                    filePath
+                                )
+                            );
+                            await this.importFolderFiles(files);
+                          } catch (error) {
+                            toast.error(
+                              this.props.t("Import failed") +
+                                ": " +
+                                (error as Error).message
+                            );
                           }
                         }
                       }}
@@ -1101,25 +995,13 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                             if (!files || files.length === 0) {
                               return;
                             }
-                            for (let item of files) {
-                              if (
-                                !supportedFormats.find((format) =>
-                                  item.name.toLowerCase().endsWith(format)
+                            await this.importFolderFiles(
+                              Array.from(files).filter((file) =>
+                                supportedFormats.some((ext) =>
+                                  file.name.toLowerCase().endsWith(ext)
                                 )
-                              ) {
-                                continue;
-                              }
-                              await this.getMd5WithBrowser(item);
-                            }
-                            this.toggleMoreOptions();
-                            if (
-                              ConfigService.getReaderConfig(
-                                "isDisableAutoSync"
-                              ) !== "yes" &&
-                              ConfigService.getItem("defaultSyncOption")
-                            ) {
-                              await this.props.cloudSyncFunc();
-                            }
+                              )
+                            );
                           }}
                         ></input>
                       )}

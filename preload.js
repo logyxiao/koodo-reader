@@ -191,6 +191,7 @@ const file = {
   readdirSync: (filePath, options) =>
     fileSync("readdir", { path: filePath, options }),
   statSync: (filePath) => fileSync("stat", { path: filePath }),
+  realpathSync: (filePath) => fileSync("realpath", { path: filePath }),
   unlinkSync: (filePath) => fileSync("unlink", { path: filePath }),
   copyFileSync: (source, destination) =>
     fileSync("copyFile", { source, destination }),

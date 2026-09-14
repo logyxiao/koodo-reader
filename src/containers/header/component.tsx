@@ -298,6 +298,7 @@ class Header extends React.Component<HeaderProps, HeaderState> {
       for (const folderPath of folders) {
         await scanFolderForNewBooks(folderPath, importBookFunc);
       }
+      this.props.handleFetchBooks();
     } catch (error) {
       console.error("Auto import folder scan error:", error);
     }

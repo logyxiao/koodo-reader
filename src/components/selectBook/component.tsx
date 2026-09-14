@@ -1,3 +1,4 @@
+import ShelfUtil from "../../utils/reader/shelfUtil";
 import React from "react";
 import BookModel from "../../models/Book";
 import "./selectBook.css";
@@ -31,10 +32,7 @@ class SelectBook extends React.Component<BookListProps, BookListState> {
     if (this.props.shelfTitle) {
       let currentShelfTitle = this.props.shelfTitle;
       if (!currentShelfTitle) return items;
-      let currentShelfList = ConfigService.getMapConfig(
-        currentShelfTitle,
-        "shelfList"
-      );
+      let currentShelfList = ShelfUtil.bookKeys(currentShelfTitle);
       let shelfItems = items.filter((item: BookModel) => {
         return currentShelfList.indexOf(item.key) > -1;
       });
@@ -56,11 +54,8 @@ class SelectBook extends React.Component<BookListProps, BookListState> {
     let shelfTitle = Object.keys(ConfigService.getAllMapConfig("shelfList"));
     let currentShelfTitle = shelfTitle[index];
     if (!currentShelfTitle) return items;
-    let currentShelfList = ConfigService.getMapConfig(
-      currentShelfTitle,
-      "shelfList"
-    );
-    let shelfItems = items.filter((item: { key: number }) => {
+    let currentShelfList = ShelfUtil.bookKeys(currentShelfTitle);
+    let shelfItems = items.filter((item: { key: string }) => {
       return currentShelfList.indexOf(item.key) > -1;
     });
     return shelfItems;

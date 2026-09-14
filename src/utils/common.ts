@@ -1,3 +1,5 @@
+import ShelfUtil from "./reader/shelfUtil";
+import { collectFolderImportFiles } from "./file/folderImport";
 ﻿import Plugin from "../models/Plugin";
 import { isElectron } from "react-device-detect";
 import CryptoJS from "crypto-js";
@@ -2103,44 +2105,25 @@ export const collectSupportedFiles = (
   return files;
 };
 
-// Lightweight dedup: only read db size/path, no file read, no md5.
-// A path match means already imported; a size match against any book in
-// the library also counts as already imported, regardless of path.
+// Folder imports preserve directory membership even when a book already exists.
+// Equal byte lengths are not evidence of equal content: the importer checks MD5.
 export const scanFolderForNewBooks = async (
   folderPath: string,
-  importFile: (file: any) => Promise<void>,
-  index?: BookPathIndex
+  importFile: (file: any) => Promise<void>
 ): Promise<number> => {
-  const fs = window.electronAPI.fs;
-  const path = window.electronAPI.path;
-  const { existingPaths, sizeSet } = index || (await getBookPathIndex());
-  const files = collectSupportedFiles(fs, path, folderPath);
+  const files = collectFolderImportFiles(window.electronAPI.fs, window.electronAPI.path, folderPath, supportedFormats, (filePath) => toast.error(i18n.t("Unable to read folder entry") + ": " + filePath));
   let imported = 0;
-  for (const filePath of files) {
-    const fileName = path.basename(filePath);
-    try {
-      const stat = fs.statSync(filePath);
-      if (!stat.isFile) continue;
-      if (existingPaths.has(filePath)) continue;
-      if (sizeSet.has(stat.size)) {
-        continue;
-      }
-      const buffer = await fs.promises.readFile(filePath);
-      const arraybuffer = new Uint8Array(buffer).buffer;
-      const blob = new Blob([arraybuffer]);
-      const file: any = new File([blob], fileName);
-      file.path = filePath;
+  try {
+    for (let index = 0; index < files.length; index++) {
+      toast.loading(`${i18n.t("Importing")}: ${index + 1}/${files.length}`, { id: "auto-folder-import" });
+      const file = files[index];
       await importFile(file);
-      existingPaths.add(filePath);
-      imported++;
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      toast.error(
-        i18n.t("Import failed") + ": " + fileName + " - " + errorMessage
-      );
-      console.error(`Error processing file ${filePath}:`, error);
+      if (file.importStatus === "imported" || file.importStatus === "linked") imported++;
+      if ((index + 1) % 50 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     }
+  } finally {
+    toast.dismiss("auto-folder-import");
+    ShelfUtil.notify();
   }
   return imported;
 };
